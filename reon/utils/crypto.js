@@ -1,12 +1,13 @@
-// простий E2E: парольна фраза -> ключ AES-GCM
-export async function deriveKey(passphrase) {
+// Генерируем ключ AES-GCM автоматически по паре пользователей
+export async function getAutoKey(me, peer) {
+  const passphrase = `${me}-${peer}-reon`;
   const enc = new TextEncoder();
-  const salt = enc.encode("reon-salt-1");
+  const salt = enc.encode("reon-auto-salt");
   const keyMaterial = await window.crypto.subtle.importKey(
     "raw", enc.encode(passphrase), { name: "PBKDF2" }, false, ["deriveKey"]
   );
   return window.crypto.subtle.deriveKey(
-    { name: "PBKDF2", salt, iterations: 100000, hash: "SHA-256" },
+    { name: "PBKDF2", salt, iterations: 50000, hash: "SHA-256" },
     keyMaterial,
     { name: "AES-GCM", length: 256 },
     false,
