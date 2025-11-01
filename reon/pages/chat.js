@@ -11,21 +11,40 @@ export default function Chat() {
   const [msg, setMsg] = useState("");
   const [list, setList] = useState([]);
   const [typing, setTyping] = useState(false);
+  const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    me.current = localStorage.getItem("reon_user") || "";
-    if (!me.current) location.href = "/";
-    const ph = localStorage.getItem("reon_passphrase") || "";
-    if (ph) setPass(ph);
+    (async () => {
+      // 1) проверяем сессию
+      const meRes = await fetch("/api/me");
+      const meJ = await meRes.json();
+      if (!meJ.ok) { location.href = "/"; return; }
+      me.current = meJ.username;
 
-    fetchUsers();
-    const iv = setInterval(() => refresh(true), 1500);
-    const iv2 = setInterval(() => {
-      if (peer && me.current) fetch(`/api/typing?a=${me.current}&b=${peer}`);
-    }, 1500);
-    window.addEventListener("online", flushQueue);
-    return () => { clearInterval(iv); clearInterval(iv2); window.removeEventListener("online", flushQueue); };
-  }, [peer]);
+      // 2) тянем список юзеров
+      await fetchUsers();
+
+      // 3) если peer не выбран — авто-выбор первого в списке
+      setPeer((p) => {
+        if (p) return p;
+        const first = users.find(u => u !== me.current);
+        return first || "";
+      });
+
+      // 4) офлайн/пулинг
+      const iv = setInterval(() => refresh(true), 1500);
+      const iv2 = setInterval(() => {
+        if (peer && me.current) fetch(`/api/typing?a=${me.current}&b=${peer}`);
+      }, 1500);
+      window.addEventListener("online", flushQueue);
+
+      setReady(true);
+      return () => { clearInterval(iv); clearInterval(iv2); window.removeEventListener("online", flushQueue); };
+    })();
+    // eslint-disable-next-line
+  }, []);
+
+  useEffect(() => { if (ready) refresh(true); }, [peer, key, ready]);
 
   async function fetchUsers() {
     const r = await fetch("/api/users");
@@ -40,17 +59,17 @@ export default function Chat() {
   }
 
   async function send() {
-    if (!msg || !key || !peer) return;
+    if (!msg.trim()) return;
+    if (!key) { alert("Установи passphrase и нажми Set key"); return; }
+    if (!peer) { alert("Выбери собеседника слева"); return; }
+    const { ct, iv } = await encryptText(key, msg);
+    const payload = { from: me.current, to: peer, ciphertext: ct, iv, ts: Date.now() };
     try {
-      const { ct, iv } = await encryptText(key, msg);
-      const payload = { from: me.current, to: peer, ciphertext: ct, iv, ts: Date.now() };
       const r = await fetch("/api/send", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(payload) });
       if (!r.ok) queuePush(payload);
       setMsg("");
       refresh(false);
-    } catch {
-      queuePush({ from: me.current, to: peer, ciphertext: "(failed)", iv: "-", ts: Date.now() });
-    }
+    } catch { queuePush(payload); }
   }
 
   async function refresh(markRead) {
@@ -80,12 +99,17 @@ export default function Chat() {
     if (peer && me.current) fetch(`/api/typing?a=${me.current}&b=${peer}`, { method: "POST" }).catch(()=>{});
   }
 
+  async function logout() {
+    await fetch("/api/logout");
+    location.href = "/";
+  }
+
   return (
     <div style={{display:"grid", gridTemplateColumns:"240px 1fr", height:"100vh", fontFamily:"system-ui"}}>
-      {/* Список пользователей */}
       <aside style={{borderRight:"1px solid #eee", background:"#f9f9f9", display:"flex", flexDirection:"column"}}>
-        <div style={{padding:"12px 16px", borderBottom:"1px solid #eee"}}>
+        <div style={{padding:"12px 16px", borderBottom:"1px solid #eee", display:"flex", gap:8, alignItems:"center"}}>
           <b>Reon</b>
+          <div style={{marginLeft:"auto"}}><button onClick={logout} style={smallBtn}>Logout</button></div>
         </div>
         <div style={{flex:1, overflowY:"auto"}}>
           {users.map((u) => (
@@ -101,7 +125,6 @@ export default function Chat() {
         </div>
       </aside>
 
-      {/* Окно чата */}
       <div style={{display:"grid", gridTemplateRows:"auto 1fr auto"}}>
         <header style={{padding:"10px 16px", borderBottom:"1px solid #eee", display:"flex", gap:8, alignItems:"center"}}>
           {peer ? (
@@ -113,7 +136,7 @@ export default function Chat() {
           ) : (
             <div style={{color:"#777"}}>← выбери пользователя</div>
           )}
-          <div style={{marginLeft:"auto", fontSize:13, color:"#666"}}>You: {me.current}</div>
+          <div style={{marginLeft:"auto", fontSize:13, color:"#666"}}>You: {me.current || "…"}</div>
         </header>
 
         <main style={{padding:16, display:"flex", flexDirection:"column", gap:8, background:"#fafafa", overflowY:"auto"}}>
@@ -132,8 +155,14 @@ export default function Chat() {
         </main>
 
         <footer style={{padding:12, borderTop:"1px solid #eee", display:"flex", gap:8, background:"#fff"}}>
-          <input value={msg} onChange={e=>onType(e.target.value)} placeholder="Type a message…" style={msgInp}/>
-          <button onClick={send} style={btn}>Send</button>
+          <input
+            value={msg}
+            onChange={e=>onType(e.target.value)}
+            placeholder={!peer ? "Выбери пользователя" : (!key ? "Введи passphrase и Set key" : "Type a message…")}
+            style={msgInp}
+            disabled={!peer || !key}
+          />
+          <button onClick={send} style={btn} disabled={!peer || !key || !msg.trim()}>Send</button>
         </footer>
       </div>
     </div>
@@ -143,4 +172,4 @@ export default function Chat() {
 const topInp = {padding:"8px 10px", border:"1px solid #ddd", borderRadius:10};
 const msgInp = {flex:1, padding:"10px 12px", border:"1px solid #ddd", borderRadius:10};
 const btn = {padding:"10px 16px", background:"#000", color:"#fff", border:"none", borderRadius:10, cursor:"pointer"};
-const smallBtn = {padding:"8px 10px", background:"#000", color:"#fff", border:"none", borderRadius:10, cursor:"pointer"};
+const smallBtn = {padding:"6px 10px", background:"#000", color:"#fff", border:"none", borderRadius:8, cursor:"pointer"};
